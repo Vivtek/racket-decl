@@ -29,13 +29,18 @@
       (if (not probe)
         #f
         (let* ([bareword  (list-ref probe 1)]
-               [probe     (regexp-match #px"^(.*)\\p{P}+<<[[:alnum:]\\-<]*$" bareword)] ; One slight weirdness that is best handled in a separate stage:
-               [bareword2 (if (not probe)                                              ; a sigil of the form ...<<EOF will match the first regex and be counted as a single bareword.
-                             bareword                                                  ; So let's cleave it off if it's there and just keep the pre-sigil part.
+               [probe     (regexp-match #px"^(.*):\\p{P}+$" bareword)]     ; There's almost certainly a fancier regex way to do this
+               [bareword2 (if (not probe)
+                             bareword
                              (list-ref probe 1)
+                          )]
+               [probe2    (regexp-match #px"^(.*)\\p{P}+<<[[:alnum:]\\-<]*$" bareword2)] ; One slight weirdness that is best handled in a separate stage:
+               [bareword3 (if (not probe2)                                               ; a sigil of the form ...<<EOF will match the first regex and be counted as a single bareword.
+                             bareword2                                                   ; So let's cleave it off if it's there and just keep the pre-sigil part.
+                             (list-ref probe2 1)
                           )
                ])
-           (list (string-length bareword2) bareword2)
+           (list (string-length bareword3) bareword3)
         )
       )
    )
@@ -231,6 +236,7 @@
            [check-brackets  #t]
            [check-sigils    #t]
            [check-plus      #f]
+           [force-sigil-space #t]
            
            [qindent 0]
            [qindmin 0]
@@ -265,7 +271,9 @@
                            (set! check-plus      #t)
                            (set! plus-quoted     #f)
                            (set! first-line      #t)
+                           (set! quoting         #f)
                            (set! starting-quote  #f)
+                           (set! stop-on-blank   #t)
                          )
                       )]
            [pop-frames-to-indent (lambda (indent)
@@ -285,12 +293,14 @@
           (set! check-barewords #f)
           (set! check-quotes    #f)
           (set! check-brackets  #f)
+          (set! force-sigil-space #t)
           (set! stop-on-blank   #t)]
        [(eq? mode 'textplus)
           (set! check-barewords #f)
           (set! check-quotes    #f)
           (set! check-brackets  #f)
           (set! check-plus      #t)
+          (set! force-sigil-space #t)
           (set! stop-on-blank   #t)]
     )
     (generator ()
@@ -483,38 +493,40 @@
                             [type (cond
                                   [line-cont 'cont]
                                   [else      'sigil])])
-                       (unless line-continued (push-frame-if-first indent))
-                       (yield (vector type lno indent tlen ttxt))
-                       (set! indent (+ indent tlen))
-                       (set! len    (- len    tlen))
-                       (set! text   (substring text tlen))
-                       ;(set! first #f)
-                       (set! non-name #t)
-                       (set! textrest line-cont)
-                       (set! closer (closing-bracket ttxt))
+                       (when (or (not first) (not force-sigil-space) (match-space ttxt))
+                         (unless line-continued (push-frame-if-first indent))
+                         (yield (vector type lno indent tlen ttxt))
+                         (set! indent (+ indent tlen))
+                         (set! len    (- len    tlen))
+                         (set! text   (substring text tlen))
+                         ;(set! first #f)
+                         (set! non-name #t)
+                         (set! textrest line-cont)
+                         (set! closer (closing-bracket ttxt))
                        
-                       (let ([probe (regexp-match #px"<<(.*)$" ttxt)])
-                         (when probe
-                            (set! len 0) ; Ignore anything else on the line
-                            (set! glom #t)
-                            (let ([mode (list-ref probe 1)])
-                               (cond
-                                  [(equal? mode "")        (set! glom-until "EOF")]
-                                  [(not (equal? mode "<")) (set! glom-until mode)]
-                               )
-                            )
+                         (let ([probe (regexp-match #px"<<(.*)$" ttxt)])
+                           (when probe
+                              (set! len 0) ; Ignore anything else on the line
+                              (set! glom #t)
+                              (let ([mode (list-ref probe 1)])
+                                 (cond
+                                    [(equal? mode "")        (set! glom-until "EOF")]
+                                    [(not (equal? mode "<")) (set! glom-until mode)]
+                                 )
+                              )
+                           )
                          )
-                       )
 
-                       (unless line-cont
-                         (set! starting-quote #t)
-                         (set! blanks-before 0)
-                         (when (eq? len 0) (next-line))
+                         (unless line-cont
+                           (set! starting-quote #t)
+                           (set! blanks-before 0)
+                           (when (eq? len 0) (next-line))
+                         )
+                         (when line-cont
+                           (set! line-continues #t)
+                          )
+                         (next-token)
                        )
-                       (when line-cont
-                         (set! line-continues #t)
-                       )
-                       (next-token)
                      )))
              ; We have a line, but stuff is on it that is disabled - this means it's a text line in a text mode.
              ; So we handle this just as though we were in 'para mode.
